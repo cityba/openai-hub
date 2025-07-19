@@ -2,6 +2,8 @@
  
 Szita AI HUB Pro egy fejlett kódolási asszisztens, amely a világ legjobb nyílt forráskódú és kereskedelmi AI modelljeit használja fel a hatékonyabb fejlesztési élmény érdekében. Az alkalmazás különlegesen optimalizált Python, Java, Kotlin, JavaScript, PHP és Excel támogatással rendelkezik.
 
+https://openrouter.ai/ API kulcs szükséges a használatához.
+
 Főbb funkciók ✨
 🧠 Több modell támogatás: OpenRouter keresztül 20+ AI modell
 
