@@ -4,7 +4,7 @@ Szita AI HUB Pro egy fejlett kódolási asszisztens, amely a világ legjobb nyí
 
 https://openrouter.ai/ API kulcs szükséges a használatához.
 
-Főbb funkciók ✨
+# Főbb funkciók ✨
 🧠 Több modell támogatás: OpenRouter keresztül 20+ AI modell
 
 💾 Kódblokk kezelés: Automatikus nyelvfelismerés és szintaxis kiemelés
@@ -19,9 +19,10 @@ Főbb funkciók ✨
 
 ⚡ Optimalizált teljesítmény: Rendszerszintű finomhangolás
 
-Telepítés 🚀
+# Telepítés 🚀
 Windows
- 
+
+Output mappába lévő exe fájl, letöltés, telepítés 
 
 Linux/MacOS
 bash
