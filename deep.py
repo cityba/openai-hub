@@ -787,6 +787,8 @@ class MainWindow(QWidget):
         self.cont_btn.setEnabled(False)
         self.status_bar.showMessage("Kérés küldése...")
         self.append_to_chat(f"\nFelhasználó: {prompt}\n")
+        #self.chat_edit.appendHtml( f'<b><span style="color: gray;">Felhasználó: {prompt}</span></b><br>')
+        #self.chat_edit.appendHtml( f'<b><span style="color: gray;">Felhasználó: {prompt}</span></b><br>')
         self.response_buffer = ""
 
         self.worker = AIWorker(
