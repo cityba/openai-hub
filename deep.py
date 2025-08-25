@@ -18,12 +18,12 @@ from PyQt5.QtWidgets import (
     QComboBox, QDoubleSpinBox, QTabWidget, QCheckBox, QSplitter,
     QMessageBox, QToolBar, QAction, QStatusBar, QFileDialog, QMenu, QToolButton,
     QLineEdit, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QSizePolicy,
-    QShortcut
+    QShortcut, QPlainTextEdit
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QSize, QTimer, QObject
 from PyQt5.QtGui import (
     QTextCursor, QPalette, QColor, QFont, QIcon, QTextCharFormat,
-    QKeySequence
+    QKeySequence, QTextDocument
 )
 
 
@@ -31,6 +31,7 @@ import gc
 import tracemalloc
 import asyncio
 import aiohttp
+
 
 
 # Próbáljuk importálni a QScintilla-t
@@ -41,6 +42,7 @@ try:
     HAS_SCINTILLA = True
 except ImportError:
     HAS_SCINTILLA = False
+
 
 
 # Rendszeroptimalizációk
@@ -54,10 +56,12 @@ except Exception as e:
     logging.error(f"Prioritás beállítási hiba: {str(e)}")
 
 
+
 # Környezeti változók
 os.environ["OMP_NUM_THREADS"] = str(os.cpu_count() or 4)
 os.environ["OPENBLAS_NUM_THREADS"] = str(os.cpu_count() or 4)
 os.environ["MKL_NUM_THREADS"] = str(os.cpu_count() or 4)
+
 
 
 # Alkalmazás konstansok
@@ -72,23 +76,42 @@ TOKEN_OPTIONS = [4096, 8192, 16384, 32768, 65536, 131072]
 
 
 
+# Logging konfiguráció (fontos a hibakereséshez)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+
 class SettingsManager:
+    """
+    Beállítások kezelésére szolgáló osztály.
+    """
+
+
     def __init__(self):
-        self.config_dir = os.path.join(os.getenv('APPDATA'), APP_NAME)
+        self.config_dir = os.path.join(os.getenv('APPDATA', os.path.expanduser("~")), APP_NAME)
         os.makedirs(self.config_dir, exist_ok=True)
         self.settings = QSettings(os.path.join(self.config_dir, 'config.ini'), QSettings.IniFormat)
 
 
     def get(self, key: str, default=None):
+        """
+        Beállítás lekérdezése.
+        """
         return self.settings.value(key, default)
 
 
     def set(self, key: str, value):
+        """
+        Beállítás mentése.
+        """
         self.settings.setValue(key, value)
 
 
     @property
     def history_dir(self):
+        """
+        Előzmények könyvtárának elérési útja.
+        """
         path = os.path.join(self.config_dir, 'history')
         os.makedirs(path, exist_ok=True)
         return path
@@ -100,6 +123,11 @@ settings = SettingsManager()
 
 
 class EncryptionManager:
+    """
+    Titkosítás kezelésére szolgáló osztály.
+    """
+
+
     def __init__(self):
         key = settings.get('encryption_key')
         if not key:
@@ -109,11 +137,21 @@ class EncryptionManager:
 
 
     def encrypt(self, data: str) -> str:
+        """
+        Adatok titkosítása.
+        """
         return self.cipher.encrypt(data.encode()).decode()
 
 
     def decrypt(self, data: str) -> str:
-        return self.cipher.decrypt(data.encode()).decode()
+        """
+        Adatok visszafejtése.
+        """
+        try:
+            return self.cipher.decrypt(data.encode()).decode()
+        except Exception as e:
+            logging.error(f"Dekódolási hiba: {e}")
+            return ""
 
 
 
@@ -122,6 +160,11 @@ encryptor = EncryptionManager()
 
 
 class NetworkManager(QThread):
+    """
+    Hálózati műveletek kezelésére szolgáló osztály.
+    """
+
+
     models_loaded = pyqtSignal(list)
     error_occurred = pyqtSignal(str)
 
@@ -129,45 +172,59 @@ class NetworkManager(QThread):
     def __init__(self):
         super().__init__()
         self.free_only = True
+        self.session = None  # aiohttp session
 
 
     async def fetch_models(self):
+        """
+        Modellek lekérdezése az API-ból.
+        """
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(MODEL_URL, timeout=6) as response:
+                self.session = session  # Hozzáadjuk a session-t az osztályhoz
+                async with session.get(MODEL_URL, timeout=10) as response:  # Increased timeout
                     response.raise_for_status()
-                    data = await response.json()
-                    parsed = self.parse_models(data.get('data', []))
+                    data = await response.json()                    
+                    parsed = self.parse_models(data.get('data', []))                    
                     self.models_loaded.emit(parsed)
         except aiohttp.ClientError as e:
             self.error_occurred.emit(f"Hálózati hiba: {str(e)}")
         except Exception as e:
             self.error_occurred.emit(f"Hálózati hiba: {str(e)}")
+        finally:
+            if self.session:
+                await self.session.close()
+                self.session = None
+
 
 
     def run(self):
+        """
+        Szál indítása.
+        """
         asyncio.run(self.fetch_models())
 
 
     def parse_models(self, models: List[Dict]) -> List[str]:
+        """
+        Modellek adatainak feldolgozása.
+        """
         result = []
+        providers = {'deepseek', 'openrouter', 'google', 'mistral', 'meta', 'moonshotai', 'anthropic', 'openai'}
+
+
         for model in models:
             model_id = model.get('id', '')
-            if not any(provider in model_id for provider in
-                       ['deepseek', 'openrouter', 'google', 'mistral', 'meta', 'moonshotai', 'anthropic']):
-                continue
-
-
             context = model.get('context_length')
-            if not isinstance(context, int) or context < 64000:
-                continue
-
-
-            pricing = model.get('pricing', {})
-            is_free = pricing.get('prompt') == "0" and pricing.get('completion') == "0"
+            is_free = ":free" in model_id  # Determine if model is free based on ID
 
 
             if self.free_only and not is_free:
+                continue  # Skip paid models if free_only is True
+
+
+            if not any(provider in model_id for provider in providers) or not (
+                    isinstance(context, int) and context >= 64000):
                 continue
 
 
@@ -176,11 +233,16 @@ class NetworkManager(QThread):
             result.append(label)
 
 
-        return result
+        return sorted(result)
 
 
 
 class AIWorker(QThread):
+    """
+    AI kérések kezelésére szolgáló osztály.
+    """
+
+
     update_received = pyqtSignal(str)
     response_completed = pyqtSignal(str)
     error_occurred = pyqtSignal(str, int)
@@ -196,13 +258,17 @@ class AIWorker(QThread):
         self.max_tokens = max_tokens
         self.running = True
         self.session = requests.Session()
+        self.session.headers.update({  # Alapértelmezett headerek beállítása
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        })
+
 
 
     def run(self):
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+        """
+        Szál indítása.
+        """
 
 
         payload = {
@@ -220,21 +286,23 @@ class AIWorker(QThread):
         try:
             response = self.session.post(
                 API_URL,
-                headers=headers,
                 json=payload,
                 stream=True,
-                timeout=30
+                timeout=60  # Increased timeout
             )
 
 
             if response.status_code != 200:
                 try:
-                    error_data = response.json()
-                    error = error_data.get('error', {}).get('message', 'Ismeretlen hiba')
-                except:
-                    error = response.text[:200] + "..." if len(response.text) > 200 else response.text
-                self.error_occurred.emit(error, response.status_code)
-                return
+                    response.raise_for_status()  # Emel hibát a nem 200-as státuszkódok esetén
+                except requests.exceptions.HTTPError as e:
+                    try:
+                        error_data = response.json()
+                        error = error_data.get('error', {}).get('message', 'Ismeretlen hiba')
+                    except (json.JSONDecodeError, AttributeError):
+                        error = response.text[:200] + "..." if len(response.text) > 200 else response.text
+                    self.error_occurred.emit(str(e), response.status_code)
+                    return
 
 
             buffer = bytearray()  # Use bytearray for efficient binary handling
@@ -311,11 +379,20 @@ class AIWorker(QThread):
 
 
     def stop(self):
+        """
+        Szál leállítása.
+        """
         self.running = False
+        self.session.close()
 
 
 
 class CodeEditor(QWidget):
+    """
+    Kódszerkesztő widget.
+    """
+
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
@@ -340,6 +417,9 @@ class CodeEditor(QWidget):
 
 
     def set_language(self, language):
+        """
+        A kódnyelv beállítása.
+        """
         if not HAS_SCINTILLA:
             return
 
@@ -361,6 +441,9 @@ class CodeEditor(QWidget):
 
 
     def setText(self, text):
+        """
+        Szöveg beállítása.
+        """
         if HAS_SCINTILLA:
             self.editor.setText(text)
         else:
@@ -368,6 +451,9 @@ class CodeEditor(QWidget):
 
 
     def text(self):
+        """
+        Szöveg lekérdezése.
+        """
         if HAS_SCINTILLA:
             return self.editor.text()
         else:
@@ -376,6 +462,11 @@ class CodeEditor(QWidget):
 
 
 class SearchDialog(QDialog):
+    """
+    Kereső párbeszédablak.
+    """
+
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Keresés")
@@ -411,11 +502,17 @@ class SearchDialog(QDialog):
 
 
     def on_search_text_changed(self, text):
+        """
+        Keresőszöveg változásakor hívódik meg.
+        """
         self.cursor = self.editor.textCursor()
         self.cursor.setPosition(0)
 
 
     def find_next(self):
+        """
+        Következő találat keresése.
+        """
         text_to_find = self.search_edit.text()
         if not text_to_find:
             return
@@ -432,6 +529,9 @@ class SearchDialog(QDialog):
 
 
     def find_prev(self):
+        """
+        Előző találat keresése.
+        """
         text_to_find = self.search_edit.text()
         if not text_to_find:
             return
@@ -467,11 +567,11 @@ class MainWindow(QWidget):
         self.current_prompt = ""
         self.code_blocks = []
         self.buffered_text = ""
-        self.update_interval = 100  # ms
+        self.update_interval = 80  # ms - Reduced for more responsive updates
         self.text_receiver = TextReceiver()  # Jelzőfogadó példányosítása
         self.text_receiver.update_text.connect(self.append_to_chat)  # Jelző összekötése
         self.is_generating = False
-        self.code_tab_count = 0 # Számláló a kód tabokhoz
+        self.code_tab_count = 0  # Számláló a kód tabokhoz
 
 
         self.setup_ui()
@@ -484,15 +584,7 @@ class MainWindow(QWidget):
 
         tracemalloc.start()
         gc.collect()
-        self.log_memory_usage()
-
-
-    def log_memory_usage(self):
-        snapshot = tracemalloc.take_snapshot()
-        top_stats = snapshot.statistics('lineno')
-        logging.info("Top 10 memóriahasználati hely:")
-        for stat in top_stats[:10]:
-            logging.info(stat)
+        
 
 
     def handle_update(self, text: str):
@@ -505,7 +597,7 @@ class MainWindow(QWidget):
         if self.buffered_text:
             self.text_receiver.update_text.emit(self.buffered_text)  # Jelzés küldése
             self.buffered_text = ""
-        if self.worker and not self.worker.isRunning():
+        if self.worker and (not self.worker.isRunning() or not self.is_generating):
             self.update_timer.stop()
 
 
@@ -579,7 +671,7 @@ class MainWindow(QWidget):
 
         model_layout = QHBoxLayout()
         self.model_combo = QComboBox()
-        self.free_check = QCheckBox("Ingyenes")
+        self.free_check = QCheckBox("Csak Ingyenes")
         self.free_check.setChecked(True)
         model_layout.addWidget(self.free_check)
         model_layout.addWidget(QLabel("Modell:"))
@@ -748,80 +840,151 @@ class MainWindow(QWidget):
 
     def apply_dark_theme(self):
         palette = QPalette()
-        palette.setColor(QPalette.Window, QColor(30, 30, 30))
-        palette.setColor(QPalette.WindowText, QColor(220, 220, 220))
-        palette.setColor(QPalette.Base, QColor(25, 25, 25))
-        palette.setColor(QPalette.AlternateBase, QColor(35, 35, 35))
-        palette.setColor(QPalette.ToolTipBase, QColor(40, 40, 40))
-        palette.setColor(QPalette.ToolTipText, QColor(200, 200, 200))
-        palette.setColor(QPalette.Text, QColor(220, 220, 220))
-        palette.setColor(QPalette.Button, QColor(45, 45, 45))
-        palette.setColor(QPalette.ButtonText, QColor(220, 220, 220))
-        palette.setColor(QPalette.Highlight, QColor(0, 122, 204))
-        palette.setColor(QPalette.HighlightedText, QColor(240, 240, 240))
+        palette.setColor(QPalette.Window, QColor("#2c3e50"))  # Sötétkék háttér
+        palette.setColor(QPalette.WindowText, QColor("#ecf0f1"))  # Világos szürke szöveg
+        palette.setColor(QPalette.Base, QColor("#34495e"))  # Még sötétebb kék
+        palette.setColor(QPalette.AlternateBase, QColor("#2c3e50"))
+        palette.setColor(QPalette.ToolTipBase, QColor("#34495e"))
+        palette.setColor(QPalette.ToolTipText, QColor("#ecf0f1"))
+        palette.setColor(QPalette.Text, QColor("#ecf0f1"))
+        palette.setColor(QPalette.Button, QColor("#3498db"))  # Élénk kék gombok
+        palette.setColor(QPalette.ButtonText, QColor("#ffffff"))  # Fehér gomb szöveg
+        palette.setColor(QPalette.Highlight, QColor("#3498db"))
+        palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
 
 
+        app.setStyle("Fusion")  # Modern stílus
         self.setPalette(palette)
         self.setStyleSheet("""
             QWidget {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-            }
-            QTextEdit, QPlainTextEdit {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3F3F46;
-                border-radius: 4px;
-                padding: 10px;
+                background-color: #2c3e50;
+                color: #ecf0f1;
+                font-family: "Segoe UI", sans-serif;
                 font-size: 14px;
             }
-            QComboBox, QDoubleSpinBox, QSpinBox {
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3F3F46;
-                border-radius: 4px;
-                padding: 5px;
+            QTextEdit, QPlainTextEdit {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: 1px solid #2c3e50;
+                border-radius: 8px;
+                padding: 12px;
+            }
+            QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: 1px solid #2c3e50;
+                border-radius: 8px;
+                padding: 8px;
+                selection-background-color: #3498db;
             }
             QPushButton {
-                background-color: #007ACC;
+                background-color: #3498db;
                 color: white;
-                padding: 8px 16px;
-                border-radius: 4px;
+                padding: 10px 20px;
+                border-radius: 8px;
                 border: none;
+                font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #1C97EA;
+                background-color: #2980b9;
+            }
+            QPushButton:pressed {
+                background-color: #2471a3;
             }
             QPushButton:disabled {
-                 background-color: #5e615f;
-                  color: #A0A0A0;
+                background-color: #7f8c8d;
+                color: #bdc3c7;
             }
             QStatusBar {
-                color: #A0A0A0;
+                color: #95a5a6;
                 font-size: 12px;
-                background-color: #252526;
-                border-top: 1px solid #3F3F46;
+                background-color: #232f34;
+                border-top: 1px solid #2c3e50;
             }
             QTabWidget::pane {
-                border: 1px solid #3F3F46;
-                background: #1E1E1E;
+                border: 1px solid #2c3e50;
+                background: #232f34;
+                border-radius: 8px;
             }
             QTabBar::tab {
-                background: #252526;
-                color: #D4D4D4;
-                padding: 5px 10px;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                border: 1px solid #3F3F46;
+                background: #34495e;
+                color: #ecf0f1;
+                padding: 8px 16px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                border: none;
                 margin-right: 2px;
             }
             QTabBar::tab:selected {
-                background: #1E1E1E;
-                border-bottom-color: #1E1E1E;
+                background: #2c3e50;
+                border-bottom-color: transparent;
             }
             QTabBar::close-button {
-                image: url(close.png);
+                image: url(close.png); /* Replace with your close icon */
                 subcontrol-position: right;
+                subcontrol-origin: padding;
+                left: 5px;
+            }
+            QGroupBox {
+                border: 1px solid #2c3e50;
+                border-radius: 8px;
+                margin-top: 1em;
+                padding: 10px;
+            
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 3px 0 3px;
+                color: #ecf0f1;
+            }
+            QToolBar {
+                background-color: #232f34;
+                border: none;
+                padding: 5px;
+            }
+            QToolButton {
+                background-color: transparent;
+                border: none;
+                padding: 5px;
+                color: #ecf0f1;
+            }
+            QToolButton:hover {
+                background-color: #34495e;
+                border-radius: 4px;
+            }
+            QMenu {
+                background-color: #34495e;
+                color: #ecf0f1;
+                border: 1px solid #2c3e50;
+                border-radius: 4px;
+            }
+            QMenu::item {
+                padding: 8px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #3498db;
+            }
+            
+            QScrollBar:vertical {
+                background-color: #232f34;
+                width: 10px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #3498db;
+                min-height: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical {
+                height: 0px;
+                subcontrol-position: bottom;
+                subcontrol-origin: margin;
+            }
+            QScrollBar::sub-line:vertical {
+                height: 0 px;
+                subcontrol-position: top;
+                subcontrol-origin: margin;
             }
         """)
 
@@ -831,7 +994,10 @@ class MainWindow(QWidget):
         for key, value in encrypted.items():
             try:
                 decrypted = self.encryption_manager.decrypt(value)
-                self.key_combo.addItem(key, decrypted)
+                if decrypted:
+                    self.key_combo.addItem(key, decrypted)
+                else:
+                    logging.warning(f"Érvénytelen kulcs: {key}")
             except Exception as e:
                 logging.error(f"API kulcs dekódolási hiba: {str(e)}")
         if self.key_combo.count() > 0:
@@ -910,14 +1076,23 @@ class MainWindow(QWidget):
 
 
     def refresh_models(self):
+        
+        # A korábbi kapcsolatok leválasztása, hogy ne legyen duplázás
+        try:
+            self.network_manager.models_loaded.disconnect(self.populate_models)
+        except TypeError:
+            pass  # Nincs aktív kapcsolat, nyugodtan mehet tovább
+
         self.model_combo.clear()
         self.network_manager.free_only = self.free_check.isChecked()
         self.network_manager.models_loaded.connect(self.populate_models)
         self.network_manager.error_occurred.connect(self.show_error)
         self.network_manager.start()
 
-
     def populate_models(self, models: List[str]):
+        """
+        Feltölti a QComboBox-ot a kapott modellekkel.
+        """
         self.model_combo.addItems(models)
         if self.model_combo.count() > 0:
             last_model = self.settings.get('last_model')
@@ -943,7 +1118,8 @@ class MainWindow(QWidget):
                     return
 
 
-                self.input_edit.setPlainText(f"A következő kód van feltöltve:\n```plaintext\n{content}\n```\n\nKérés:")
+                self.input_edit.setPlainText(
+                    f"A következő kód van feltöltve:\n```plaintext\n{content}\n```\n\nKérés:")
             except Exception as e:
                 QMessageBox.critical(self, "Hiba", f"Fájl olvasási hiba: {str(e)}")
 
@@ -1020,9 +1196,9 @@ class MainWindow(QWidget):
         # Szövegformázás beállítása a szerep alapján
         format = QTextCharFormat()
         if role == "user":
-            format.setForeground(QColor("lightblue"))  # Felhasználói kérés színe
+            format.setForeground(QColor("#3498db"))  # Felhasználói kérés színe
         elif self.is_generating:
-            format.setForeground(QColor("lightgreen"))  # Válasz generálás közben
+            format.setForeground(QColor("#2ecc71"))  # Válasz generálás közben
 
 
         cursor.insertText(text, format)
@@ -1045,11 +1221,13 @@ class MainWindow(QWidget):
         self.is_generating = False  # Válasz generálás befejeződött
         self.set_generating_background(False)  # Zöld háttér eltávolítása
 
+
         # Törli a kérést a kérés ablakból
         self.input_edit.clear()
 
+
         # Jelzi a chat ablak függőleges görgetősávjának háttérszínét
-        self.set_scroll_indicator_color(QColor("lightgreen"))
+        self.set_scroll_indicator_color(QColor("#2ecc71"))
 
 
     def show_error(self, message: str, status_code: int = None):
@@ -1064,8 +1242,35 @@ class MainWindow(QWidget):
 
 
     def show_truncated_message(self):
-        QMessageBox.warning(self, "Csonkolt válasz",
-                            "A válasz csonkolva lett a maximális tokenek számának elérése miatt.")
+
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Folytatás...")
+        dialog.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+
+
+        layout = QVBoxLayout()
+        label = QLabel("A válasz folytatódik...")
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("""
+            font-size: 16px;
+            padding: 20px;
+        """)
+        layout.addWidget(label)
+        dialog.setLayout(layout)
+        dialog.setFixedSize(300, 100)
+
+
+        # Elindítjuk a QTimer-t az ablak bezárásához és a kérés folytatásához
+        QTimer.singleShot(3000, dialog.close)
+        QTimer.singleShot(3000, self.continue_request)
+
+
+        dialog.exec_()
+
+
+        # QMessageBox.warning(self, "Csonkolt válasz","A válasz csonkolva lett a maximális tokenek számának elérése miatt.")
 
 
     def clear_chat_display(self):
@@ -1246,52 +1451,49 @@ class MainWindow(QWidget):
         Beállítja a chat_display háttérszínét a válaszadás állapotától függően.
         """
         if is_generating:
-            self.chat_display.setStyleSheet("background-color: #304030;")  # Zöldes háttér
+            self.chat_display.setStyleSheet("background-color: #232f34;")  # Sötétebb háttér
         else:
-            self.chat_display.setStyleSheet("background-color: #1E1E1E;")  # Alapértelmezett háttér
+            self.chat_display.setStyleSheet("background-color: #34495e;")  # Alapértelmezett háttér
 
 
     def set_scroll_indicator_color(self, color):
-        """
-        Beállítja a chat ablak függőleges görgetősávjának háttérszínét.
-        """
-        # A stíluslap módosítása a függőleges görgetősáv háttérszínének beállításához
+
+
         stylesheet = f"""
-            QTextEdit {{
-                background-color: #1E1E1E;
-                color: #D4D4D4;
-                border: 1px solid #3F3F46;
-                border-radius: 4px;
-                padding: 10px;
-                font-size: 14px;
-            }}
-            QScrollBar:vertical {{
-                background-color: #252526;
-                width: 10px;
-                margin: 0px 0px 0px 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {color.name()};
-                min-height: 20px;
-            }}
-            QScrollBar::add-line:vertical {{
-                height: 0px;
-                subcontrol-position: bottom;
-                subcontrol-origin: margin;
-            }}
-            QScrollBar::sub-line:vertical {{
-                height: 0 px;
-                subcontrol-position: top;
-                subcontrol-origin: margin;
-            }}
+             QTextEdit {{
+            background-color: #34495e;
+            color: #ecf0f1;
+            border: 1px solid #2c3e50;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 14px;
+        }}
+        QScrollBar:vertical {{
+            background-color: #ecf0f1;
+            width: 10px;
+            margin: 0px;
+        }}
+        QScrollBar::handle:vertical {{
+            background-color: {color.name()};
+            min-height: 20px;
+            border-radius: 5px;
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background: none;
+        }}
         """
         self.chat_display.setStyleSheet(stylesheet)
+
 
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     mainWin = MainWindow()
     mainWin.show()
-    sys.exit(app.exec_()) 
+    sys.exit(app.exec_())
 
     #--hidden-import=cryptography --hidden-import=cryptography.fernet --hidden-import=psutil --hidden-import=aiohttp --hidden-import=asyncio --hidden-import=PyQt5.sip --hidden-import=PyQt5.QtCore --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.Qsci
+
