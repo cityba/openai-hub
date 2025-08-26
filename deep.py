@@ -4,7 +4,6 @@ import json
 import time
 import platform
 import re
-import gc
 import asyncio
 import aiohttp
 import requests
@@ -15,20 +14,15 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QLabel,
     QComboBox, QDoubleSpinBox, QTabWidget, QCheckBox, QSplitter,
     QMessageBox, QToolBar, QAction, QStatusBar, QFileDialog, QMenu, QToolButton,
-    QLineEdit, QDialog, QDialogButtonBox, QFormLayout, QGroupBox,
-    QShortcut, QPlainTextEdit
+    QLineEdit, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QShortcut, QPlainTextEdit
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QSize, QTimer, QObject
-from PyQt5.QtGui import (
-    QTextCursor, QPalette, QColor, QFont, QIcon, QTextCharFormat,
-    QKeySequence, QTextDocument
-)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QTimer, QObject, QSize,QPropertyAnimation
+from PyQt5.QtGui import QTextCursor, QPalette, QColor, QFont, QIcon, QTextCharFormat, QKeySequence, QTextDocument,QLinearGradient,QBrush
 
 # Scintilla lexer import
 try:
     from PyQt5.Qsci import (QsciScintilla, QsciLexerPython, QsciLexerCPP, QsciLexerJava, QsciLexerJavaScript,
-    QsciLexerHTML,  QsciLexerXML,QsciLexerJSON,QsciLexerBash,
-    QsciLexerSQL)
+                           QsciLexerHTML, QsciLexerXML, QsciLexerJSON, QsciLexerBash, QsciLexerSQL)
     HAS_SCINTILLA = True
 except ImportError:
     HAS_SCINTILLA = False
@@ -44,7 +38,7 @@ DEFAULT_TEMP = 0.4
 DEFAULT_TOKENS_INDEX = 3
 
 def optimize_system():
-    """Rendszerrősszerek optimalizálása"""
+    """Rendszerrősszék optimalizálása"""
     try:
         proc = psutil.Process(os.getpid())
         if platform.system() == "Windows":
@@ -135,10 +129,8 @@ class NetworkManager(QThread):
 
     def parse_models(self, models: List[Dict]) -> List[str]:
         result = []
-        providers = {
-            'deepseek', 'openrouter', 'google', 'bigcode', 'mistral', 'meta',
-            'moonshotai', 'anthropic', 'openai', 'nous', 'perplexity','qwen'
-        }
+        providers = {'deepseek', 'openrouter', 'google', 'bigcode', 'mistral', 'meta',
+                     'moonshotai', 'anthropic', 'openai', 'nous', 'perplexity', 'qwen'}
 
         for m in models:
             model_id = m.get('id', '')
@@ -160,7 +152,7 @@ class NetworkManager(QThread):
                 continue
 
             # ha van normális context_length, vagy prompt=0 és completion=0
-            if isinstance(context, int) :
+            if isinstance(context, int):
                 tokens = context // 1024
             elif prompt == 0 and completion == 0:
                 tokens = 0
@@ -171,7 +163,6 @@ class NetworkManager(QThread):
             result.append(label)
 
         return sorted(result)
-
 
 class AIWorker(QThread):
     """AI munkamenet kezelése"""
@@ -213,10 +204,7 @@ class AIWorker(QThread):
                 try:
                     resp.raise_for_status()
                 except requests.exceptions.HTTPError as e:
-                    try:
-                        err = resp.json().get('error', {}).get('message', 'Unknown error')
-                    except Exception:
-                        err = resp.text[:200] + "..." if len(resp.text) > 200 else resp.text
+                    err = resp.json().get('error', {}).get('message', 'Unknown error')
                     self.error_occurred.emit(str(e), resp.status_code)
                 return
 
@@ -225,28 +213,21 @@ class AIWorker(QThread):
                 if not self.running:
                     return
                 if chunk:
-                    try:
-                        data = chunk
-                        if data.startswith(b'data:'):
-                            data = data[5:].strip()
-                        if not data:
-                            continue
-                        if not data.startswith(b'{'):
-                            continue
-                        parsed = json.loads(data.decode('utf-8'))
-                        choices = parsed.get('choices', [{}])
-                        if choices:
-                            delta = choices[0].get('delta', {})
-                            content = delta.get('content', '')
-                            if content:
-                                buffer.extend(content.encode('utf-8'))
-                                self.update_received.emit(buffer.decode('utf-8', errors='replace'))
-                                buffer.clear()
-                            finish_reason = choices[0].get('finish_reason')
-                            if finish_reason == 'length':
-                                self.truncated.emit()
-                    except Exception:
-                        pass
+                    data = chunk[5:].strip() if chunk.startswith(b'data:') else chunk.strip()
+                    if not data.startswith(b'{'):
+                        continue
+                    parsed = json.loads(data.decode('utf-8'))
+                    choices = parsed.get('choices', [{}])
+                    if choices:
+                        delta = choices[0].get('delta', {})
+                        content = delta.get('content', '')
+                        if content:
+                            buffer.extend(content.encode('utf-8'))
+                            self.update_received.emit(buffer.decode('utf-8', errors='replace'))
+                            buffer.clear()
+                        finish_reason = choices[0].get('finish_reason')
+                        if finish_reason == 'length':
+                            self.truncated.emit()
 
             if buffer:
                 self.update_received.emit(buffer.decode('utf-8', errors='replace'))
@@ -261,25 +242,40 @@ class AIWorker(QThread):
         self.running = False
         self.session.close()
 
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPlainTextEdit
+from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt
+try:
+    from PyQt5.Qsci import QsciScintilla, QsciLexerPython, QsciLexerCPP, QsciLexerJava, QsciLexerJavaScript, QsciLexerHTML, QsciLexerXML, QsciLexerJSON, QsciLexerSQL, QsciLexerBash
+    HAS_SCINTILLA = True
+except ImportError:
+    HAS_SCINTILLA = False
+
 class CodeEditor(QWidget):
     """Kódszerkesztő widget"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setContentsMargins(5, 5, 5, 5)
 
         if HAS_SCINTILLA:
             self.editor = QsciScintilla()
             self.editor.setAutoIndent(True)
             self.editor.setIndentationGuides(True)
             self.editor.setMarginLineNumbers(1, True)
-            self.editor.setMarginWidth(1, "0000")
+            self.editor.setMarginWidth(1, "00000")
             self.editor.setBraceMatching(QsciScintilla.SloppyBraceMatch)
             self.editor.setCaretLineVisible(True)
-            self.editor.setCaretLineBackgroundColor(QColor(30, 30, 40))
+            self.editor.setCaretLineBackgroundColor(QColor(200, 230, 200))
+            
+            # Beállítjuk a háttérszínt a QsciScintilla esetén
+            self.editor.SendScintilla(QsciScintilla.SCI_STYLESETBACK, QsciScintilla.STYLE_DEFAULT, QColor(204, 214, 203))  # Pasztel zöld
         else:
             self.editor = QPlainTextEdit()
             self.editor.setReadOnly(True)
+
+        # A QPlainTextEdit háttérszínének beállítása
+        self.editor.setStyleSheet("background-color:#ced6cb;")
 
         self.layout.addWidget(self.editor)
 
@@ -293,19 +289,21 @@ class CodeEditor(QWidget):
             "java": QsciLexerJava,
             "javascript": QsciLexerJavaScript,
             "js": QsciLexerJavaScript,
-            "typescript": QsciLexerJavaScript,   
+            "typescript": QsciLexerJavaScript,
             "ts": QsciLexerJavaScript,
-            "php": QsciLexerHTML,   
+            "php": QsciLexerHTML,
             "html": QsciLexerHTML,
             "xml": QsciLexerXML,
             "json": QsciLexerJSON,
             "sql": QsciLexerSQL,
             "bash": QsciLexerBash,
             "sh": QsciLexerBash
-            }
+        }
         lexer = lexer_map.get(language.lower())
         if lexer:
             self.editor.setLexer(lexer())
+        else:
+            print(f"Lexer not found for language: {language}")
 
     def setText(self, text):
         if HAS_SCINTILLA:
@@ -315,7 +313,6 @@ class CodeEditor(QWidget):
 
     def text(self):
         return self.editor.text() if HAS_SCINTILLA else self.editor.toPlainText()
-
 class SearchDialog(QDialog):
     """Keresés dialógusablak"""
     def __init__(self, parent=None):
@@ -400,8 +397,6 @@ class MainWindow(QWidget):
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.flush_buffer)
 
-        gc.collect()
-
     def setup_ui(self):
         """Felület létrehozása"""
         self.setWindowTitle("Szita AI Kódasszisztens")
@@ -465,9 +460,11 @@ class MainWindow(QWidget):
         self.upload_btn = QPushButton("Fájl feltöltés")
         self.send_btn = QPushButton("Küldés")
         self.cont_btn = QPushButton("Folytatás")
+        self.stop_btn = QPushButton("Leállítás")
         btn_layout.addWidget(self.upload_btn)
         btn_layout.addWidget(self.send_btn)
         btn_layout.addWidget(self.cont_btn)
+        btn_layout.addWidget(self.stop_btn)
         input_layout.addLayout(btn_layout)
         left_layout.addWidget(input_group, 1)
 
@@ -548,6 +545,7 @@ class MainWindow(QWidget):
     def setup_connections(self):
         """Kapcsolatok létrehozása"""
         self.send_btn.clicked.connect(self.send_request)
+        self.stop_btn.clicked.connect(self.stop_request)
         self.cont_btn.clicked.connect(self.continue_request)
         self.upload_btn.clicked.connect(self.upload_file)
         self.free_check.stateChanged.connect(self.refresh_models)
@@ -641,7 +639,6 @@ class MainWindow(QWidget):
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait()
-        gc.collect()
         super().closeEvent(event)
 
     def autosave_history(self):
@@ -685,8 +682,8 @@ class MainWindow(QWidget):
     def clear_history(self):
         """Előzmények törlése"""
         reply = QMessageBox.question(self, "Előzmények törlése",
-                                    "Biztosan törlöd az összes előzményt?",
-                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                                     "Biztosan törlöd az összes előzményt?",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             try:
                 for f in os.listdir(self.settings.history_dir):
@@ -821,6 +818,7 @@ class MainWindow(QWidget):
         self.cont_btn.setEnabled(enabled)
         self.upload_btn.setEnabled(enabled)
         self.input_edit.setEnabled(enabled)
+        self.stop_btn.setEnabled(not enabled)
 
     def start_worker(self, api_key, model):
         """Munkamenet indítása"""
@@ -879,7 +877,7 @@ class MainWindow(QWidget):
         self.is_generating = False
         self.set_generating_background(False)
         self.input_edit.clear()
-        self.set_scroll_indicator_color(QColor("#2ecc71"))
+         
 
     def show_error(self, msg: str, code: int = None):
         """Hiba megjelenítése"""
@@ -1015,24 +1013,51 @@ class MainWindow(QWidget):
         self.chat_display.setTextCursor(cursor)
 
     def set_generating_background(self, is_gen):
-        """Állapotfüggő háttér beállítása"""
-        bg = "#232f34" if is_gen else "#34495e"
-        self.chat_display.setStyleSheet(f"background-color:{bg};")
+        """Állapotfüggő animált háttér beállítása"""
+        # Meglévő timer leállítása
+        if hasattr(self, 'bg_timer') and self.bg_timer.isActive():
+            self.bg_timer.stop()
 
-    def set_scroll_indicator_color(self, color):
-        """Görgetőszalag színének beállítása"""
-        style = f"""
-            QScrollBar:vertical {{
-                background-color:#ecf0f1;
-                width:10px;
-            }}
-            QScrollBar::handle:vertical {{
-                background-color:{color.name()};
-                min-height:20px;
-                border-radius:5px;
-            }}
-        """
-        self.chat_display.setStyleSheet(style)
+        # Kezdő és vég színek meghatározása
+        start_color = QColor(52, 73, 94)  # #34495e - alap szín
+        end_color = QColor(30,  30, 30)   # #54695e - generálás szín
+        
+        if is_gen:
+            self.bg_colors = [start_color, end_color]
+            
+        else:
+            self.bg_colors = [end_color, start_color]  # Vissza az eredeti színre
+
+        self.current_step = 0
+        self.steps = 50  # Kevesebb lépés gyorsabb átmenet
+        self.bg_timer = QTimer()
+        self.bg_timer.timeout.connect(self._update_background_color)
+        self.bg_timer.start(20)  # 20 ms -> 50 FPS
+
+    def _update_background_color(self):
+        """Háttérszín frissítése az animációhoz"""
+        if self.current_step <= self.steps:
+            # Szín interpoláció
+            start_color = self.bg_colors[0]
+            end_color = self.bg_colors[1]
+            
+            ratio = self.current_step / self.steps
+            
+            r = int(start_color.red() + (end_color.red() - start_color.red()) * ratio)
+            g = int(start_color.green() + (end_color.green() - start_color.green()) * ratio)
+            b = int(start_color.blue() + (end_color.blue() - start_color.blue()) * ratio)
+            
+            color = QColor(r, g, b)
+            self.chat_display.setStyleSheet(f"background-color: {color.name()};")
+            
+            self.current_step += 1
+        else:
+            # Animáció vége - timer leállítása
+            self.bg_timer.stop()
+            # Biztosítjuk, hogy a végső szín beállítva legyen
+            final_color = self.bg_colors[1]
+            self.chat_display.setStyleSheet(f"background-color: {final_color.name()};")
+  
 
     def get_icon_path(self, name):
         """Ikon elérési útja"""
@@ -1052,12 +1077,23 @@ class MainWindow(QWidget):
         """Alkalmazás ikonjának betöltése"""
         return self.get_icon("icon.ico") or self.get_icon("icon.png") or QIcon()
 
+    def stop_request(self):
+        """Kérés leállítása"""
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.worker.wait()
+            self.set_ui_state(True)
+            self.is_generating = False
+            self.set_generating_background(False)
+            self.status_bar.showMessage("Kérés leállítva.")
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
     sys.exit(app.exec_())
 
+    
     #--hidden-import=cryptography --hidden-import=cryptography.fernet --hidden-import=psutil --hidden-import=aiohttp --hidden-import=asyncio --hidden-import=PyQt5.sip --hidden-import=PyQt5.QtCore --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.Qsci
 
  
