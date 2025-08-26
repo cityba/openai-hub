@@ -26,7 +26,9 @@ from PyQt5.QtGui import (
 
 # Scintilla lexer import
 try:
-    from PyQt5.Qsci import QsciScintilla, QsciLexerPython, QsciLexerCPP, QsciLexerJava, QsciLexerJavaScript
+    from PyQt5.Qsci import (QsciScintilla, QsciLexerPython, QsciLexerCPP, QsciLexerJava, QsciLexerJavaScript,
+    QsciLexerHTML,  QsciLexerXML,QsciLexerJSON,QsciLexerBash,
+    QsciLexerSQL)
     HAS_SCINTILLA = True
 except ImportError:
     HAS_SCINTILLA = False
@@ -133,20 +135,43 @@ class NetworkManager(QThread):
 
     def parse_models(self, models: List[Dict]) -> List[str]:
         result = []
-        providers = {'deepseek', 'openrouter', 'google', 'mistral', 'meta',
-                     'moonshotai', 'anthropic', 'openai'}
+        providers = {
+            'deepseek', 'openrouter', 'google', 'bigcode', 'mistral', 'meta',
+            'moonshotai', 'anthropic', 'openai', 'nous', 'perplexity','qwen'
+        }
+
         for m in models:
             model_id = m.get('id', '')
             context = m.get('context_length')
+
+            # prompt/completion lehet közvetlenül vagy limits alatt
+            limits = m.get('limits', {})
+            prompt = m.get('prompt', limits.get('prompt'))
+            completion = m.get('completion', limits.get('completion'))
+
             is_free = ":free" in model_id
+
+            # csak free modellek, ha kell
             if self.free_only and not is_free:
                 continue
-            if not any(p in model_id for p in providers) or not isinstance(context, int) or context < 64000:
+
+            # provider szűrés
+            if not any(p in model_id for p in providers):
                 continue
-            tokens = context // 1024
-            label = f"{model_id} | {tokens}K {' 🆓 ' if is_free else '💲'}"
+
+            # ha van normális context_length, vagy prompt=0 és completion=0
+            if isinstance(context, int) :
+                tokens = context // 1024
+            elif prompt == 0 and completion == 0:
+                tokens = 0
+            else:
+                continue
+
+            label = f"{model_id} | {tokens}K {'🆓' if is_free else '💲'}"
             result.append(label)
+
         return sorted(result)
+
 
 class AIWorker(QThread):
     """AI munkamenet kezelése"""
@@ -264,9 +289,20 @@ class CodeEditor(QWidget):
         lexer_map = {
             "python": QsciLexerPython,
             "cpp": QsciLexerCPP,
+            "c++": QsciLexerCPP,
             "java": QsciLexerJava,
-            "javascript": QsciLexerJavaScript
-        }
+            "javascript": QsciLexerJavaScript,
+            "js": QsciLexerJavaScript,
+            "typescript": QsciLexerJavaScript,   
+            "ts": QsciLexerJavaScript,
+            "php": QsciLexerHTML,   
+            "html": QsciLexerHTML,
+            "xml": QsciLexerXML,
+            "json": QsciLexerJSON,
+            "sql": QsciLexerSQL,
+            "bash": QsciLexerBash,
+            "sh": QsciLexerBash
+            }
         lexer = lexer_map.get(language.lower())
         if lexer:
             self.editor.setLexer(lexer())
@@ -767,12 +803,12 @@ class MainWindow(QWidget):
         self.is_generating = True
         if not continue_conv:
             self.history.append({"role": "user", "content": self.current_prompt})
-            self.append_to_chat(f"**Felhasználó:** {self.current_prompt}\n\n\n***\n", role="user")
+            self.append_to_chat(f"**Felhasználó:** {self.current_prompt}\n\n", role="user")
         else:
             last_resp = self.history[-1]["content"] if self.history and self.history[-1]["role"] == "assistant" else ""
             self.history.append({
                 "role": "user",
-                "content": f"Az előző asszisztensi válasz eddig így szólt:\n\n{last_resp}\n\nKérlek, folytasd pontosan innen, ne kezdd elölről."
+                "content": f"\nKérlek komment nélkül folytasd a kódot!\n"
             })
 
         self.status_bar.showMessage("Kérés folyamatban…")
@@ -1024,3 +1060,4 @@ if __name__ == "__main__":
 
     #--hidden-import=cryptography --hidden-import=cryptography.fernet --hidden-import=psutil --hidden-import=aiohttp --hidden-import=asyncio --hidden-import=PyQt5.sip --hidden-import=PyQt5.QtCore --hidden-import=PyQt5.QtGui --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.Qsci
 
+ 
